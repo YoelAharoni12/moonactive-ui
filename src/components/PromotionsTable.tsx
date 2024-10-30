@@ -1,11 +1,18 @@
-import React, { useEffect, useRef } from 'react';
-import { Promotion } from "../shared/promotion.model";
-import { useInfiniteQuery } from "@tanstack/react-query";
+import React, {useEffect, useRef, useState} from 'react';
+import {useInfiniteQuery} from '@tanstack/react-query';
+import {Promotion} from "../shared/promotion.model";
+import PromotionRow from "./promotion-row/promotionRow";
+import Notification from "./popup/sharePopup";
 
 const PromotionsTable = () => {
-    const fetchPromotions = async ({ pageParam = 1 }) => {
-        const response = await fetch(`http://localhost:8000/promotions?page=${pageParam}&limit=10`);
+    const [promotionsData, setPromotionsData] = useState<{ [key: string]: Promotion }>({});
+    const containerRef = useRef<HTMLDivElement>(null);
+    const loadMoreRef = useRef<HTMLDivElement>(null);
+    const [showToast, setShowToast] = useState(false);
+    const wsRef = useRef<WebSocket | null>(null);
 
+    const fetchPromotions = async ({pageParam = 1}) => {
+        const response = await fetch(`http://localhost:8000/promotions?page=${pageParam}&limit=10`);
         return response.json();
     };
 
@@ -14,17 +21,29 @@ const PromotionsTable = () => {
         fetchNextPage,
         hasNextPage,
         isFetchingNextPage,
+        isError,
+        error,
     } = useInfiniteQuery({
         queryKey: ['promotions'],
         initialPageParam: 1,
         queryFn: fetchPromotions,
         getNextPageParam: (lastPage, pages) => {
             return lastPage.length ? pages.length + 1 : undefined;
-        }
+        },
     });
 
-    const containerRef = useRef<HTMLDivElement>(null);
-    const loadMoreRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        if (data) {
+            const newPromotions: Record<string, Promotion> = data.pages.flat().reduce((acc, promotion) => {
+                acc[promotion._id] = promotion;
+                return acc;
+            }, {});
+            setPromotionsData((prevData) => {
+                return ({...prevData, ...newPromotions});
+            });
+        }
+    }, [data]);
 
     useEffect(() => {
         if (!containerRef.current || !loadMoreRef.current) return;
@@ -37,9 +56,9 @@ const PromotionsTable = () => {
                 }
             },
             {
-                root: containerRef.current,   // Set the root to the scrollable container
-                rootMargin: '200px',          // Start fetching when 200px away from the bottom
-                threshold: 0.1,               // Trigger when half of loadMoreRef is visible
+                root: containerRef.current,
+                rootMargin: '50%',
+                threshold: 0.1,
             }
         );
 
@@ -51,10 +70,37 @@ const PromotionsTable = () => {
         };
     }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
 
+    useEffect(() => {
+        if (!hasNextPage && !isFetchingNextPage && data?.pages.length) {
+            setShowToast(true);
+            setTimeout(() => setShowToast(false), 5000);
+        }
+    }, [hasNextPage, isFetchingNextPage, data]);
+
+    useEffect(() => {
+        const ws = new WebSocket('ws://localhost:8000');
+        wsRef.current = ws
+        ws.onmessage = (event) => {
+            const updatePromotion = JSON.parse(event.data);
+
+            setPromotionsData((prevData) => {
+                return prevData[updatePromotion._id] ? ({
+                    ...prevData,
+                    [updatePromotion._id]: updatePromotion,
+                }) : prevData
+            });
+
+        };
+
+        return () => {
+            ws.close();
+        };
+    }, []);
+
     return (
         <>
             <h1>Promotions</h1>
-            <div ref={containerRef} style={{ overflow: 'auto', maxHeight: '400px' }}>
+            <div ref={containerRef} style={{overflow: 'auto', maxHeight: '50vh'}}>
                 <table>
                     <thead>
                     <tr>
@@ -66,23 +112,17 @@ const PromotionsTable = () => {
                     </tr>
                     </thead>
                     <tbody>
-                    {data?.pages.map((promotions: Promotion[]) =>
-                        promotions.map(({ name, type, startDate, endDate, group }, i) => (
-                            <tr key={i}>
-                                <td>{name}</td>
-                                <td>{type}</td>
-                                <td>{startDate}</td>
-                                <td>{endDate}</td>
-                                <td>{group}</td>
-                            </tr>
-                        ))
-                    )}
+                    {Object.values(promotionsData).map((promotion) => (
+                        <PromotionRow key={promotion._id} promotion={promotion}/>
+                    ))}
                     </tbody>
                 </table>
-                <div ref={loadMoreRef} style={{ height: '20px' }}>
+                <div ref={loadMoreRef} style={{height: '20px', border: '1px solid red', visibility: 'hidden'}}>
                     {isFetchingNextPage && <span>Loading more...</span>}
                 </div>
             </div>
+            {showToast && <Notification message="No more promotions to load." type={'success'}/>}
+            {isError && <Notification message={error.message} type={'error'}/>}
         </>
     );
 };

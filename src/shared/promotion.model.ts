@@ -1,5 +1,5 @@
 export interface Promotion {
-    id: string,
+    _id: string,
     name: string,
     type: string,
     group: string,
